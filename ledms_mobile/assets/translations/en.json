@@ -1,0 +1,12 @@
+{
+  "app_title": "LEDMS System",
+  "dashboard": "Dashboard",
+  "my_docs": "My Documents",
+  "add_doc": "Add Document",
+  "total_expenses": "Total Expenses",
+  "status_approved": "Approved",
+  "status_pending": "Pending",
+  "status_draft": "Draft",
+  "role_owner": "Owner",
+  "role_employee": "Employee"
+}

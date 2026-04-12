@@ -1,0 +1,12 @@
+{
+  "app_title": "LEDMS Системасы",
+  "dashboard": "Башкаруу панели",
+  "my_docs": "Менин документтерим",
+  "add_doc": "Документ кошуу",
+  "total_expenses": "Жалпы чыгашалар",
+  "status_approved": "Жактырылды",
+  "status_pending": "Текшерүүдө",
+  "status_draft": "Черновик",
+  "role_owner": "Ээси",
+  "role_employee": "Кызматкер"
+}

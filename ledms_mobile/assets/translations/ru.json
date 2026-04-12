@@ -1,0 +1,12 @@
+{
+  "app_title": "LEDMS Система",
+  "dashboard": "Дашборд",
+  "my_docs": "Мои документы",
+  "add_doc": "Добавить документ",
+  "total_expenses": "Общие расходы",
+  "status_approved": "Одобрено",
+  "status_pending": "На проверке",
+  "status_draft": "Черновик",
+  "role_owner": "Владелец",
+  "role_employee": "Сотрудник"
+}
