@@ -11,7 +11,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'file', 'supplier', 'amount', 
             'doc_date', 'category', 'category_display', 
-            'status', 'status_display', 'author_name', 'created_at'
+            'status', 'status_display', 'author_name', 'created_at', 'author', 'raw_text'
         ]
         # Эти поля клиент (Flutter) не присылает, мы ставим их сами
         read_only_fields = ['status', 'author', 'company', 'raw_text']

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:ledms_mobile/screens/doc_details_screen.dart';
 import 'services/api_service.dart'; // Наш сервис с Dio
 import 'login_screen.dart';
 import 'create_doc_screen.dart';
@@ -35,9 +36,10 @@ class _DocsListScreenState extends State<DocsListScreen> {
   final ApiService _apiService = ApiService(); // Используем наш сервис
   List docs = [];
   Map<String, dynamic> stats = {
-    "total_docs": 0,
-    "pending_docs": 0,
-    "archived_docs": 0,
+    "total_count": 0,
+    "pending_count": 0,
+    "approved_count": 0,
+    "total_expenses": 0,
   };
 
   String displayUserName = "Loading...";
@@ -57,6 +59,7 @@ class _DocsListScreenState extends State<DocsListScreen> {
     try {
       // 1. Получаем документы
       final fetchedDocs = await _apiService.getDocuments();
+      print("DOCS FROM API: $fetchedDocs");
       // 2. Получаем статистику
       final fetchedStats = await _apiService.getStats();
 
@@ -206,21 +209,21 @@ class _DocsListScreenState extends State<DocsListScreen> {
         children: [
           _buildStatCard(
             "Total",
-            stats['total_docs'].toString(),
+            stats['total_count'].toString(),
             const Color(0xFF2563EB),
             Icons.folder_outlined,
           ),
           const SizedBox(width: 12),
           _buildStatCard(
             "Pending",
-            stats['pending_docs'].toString(),
+            stats['pending_count'].toString(),
             Colors.orange,
             Icons.hourglass_empty,
           ),
           const SizedBox(width: 12),
           _buildStatCard(
-            "Archived",
-            stats['archived_docs'].toString(),
+            "Approved",
+            stats['approved_count'].toString(),
             Colors.blueGrey,
             Icons.archive_outlined,
           ),
@@ -317,7 +320,12 @@ class _DocsListScreenState extends State<DocsListScreen> {
           "Status: ${doc['status_label'] ?? doc['status'] ?? 'N/A'}",
         ),
         trailing: const Icon(Icons.chevron_right, size: 18),
-        onTap: () {},
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => DocDetailsScreen(doc: doc)),
+          );
+        },
       ),
     );
   }

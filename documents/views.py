@@ -13,8 +13,6 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        # Базовый фильтр: только документы компании текущего пользователя
-        # Это и есть главная фишка SaaS (Multi-tenancy)
         base_qs = Document.objects.filter(company=user.company)
 
         # Если владелец или менеджер — видят всё внутри компании
@@ -28,6 +26,7 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
         # Автоматически проставляем автора и компанию при создании
         serializer.save(
             author=self.request.user,
+            owner=self.request.user,
             company=self.request.user.company,
             status='draft' # По ТЗ при загрузке всегда статус "Черновик"
         )
@@ -67,6 +66,7 @@ class DashboardStatsAPIView(APIView):
             # Считаем общую сумму всех одобренных расходов (пункт 7.7 ТЗ)
             "total_expenses": user_docs.filter(status='approved').aggregate(Sum('amount'))['amount__sum'] or 0,
             "user_role": user.role,
+            "user_name": user.username,
         }
 
         return Response(stats)

@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api-auth/', include('rest_framework.urls')),
     path('api/users/', include('users.urls')),
+    path('api/documents/', include('documents.urls')),
     
 ]
 # Это магическая строчка, которая раздает файлы в режиме разработки

@@ -72,13 +72,26 @@ class ApiService {
         'documents/all/',
         options: Options(headers: {"Authorization": "Bearer $token"}),
       );
-      // Проверяем структуру ответа (зависит от твоего Django)
-      if (response.data is Map) {
-        return response.data['documents'] ?? [];
+
+      // Логируем для отладки, чтобы видеть реальную структуру списка
+      print("DEBUG DOCUMENTS DATA: ${response.data}");
+
+      // Если сервер прислал список напрямую: [ {...}, {...} ]
+      if (response.data is List) {
+        return response.data;
       }
-      return response.data as List;
+
+      // Если сервер прислал объект и список лежит внутри (например, под ключом 'results' или 'documents')
+      if (response.data is Map) {
+        if (response.data.containsKey('results'))
+          return response.data['results'];
+        if (response.data.containsKey('documents'))
+          return response.data['documents'];
+      }
+
+      return [];
     } catch (e) {
-      print("Ошибка получения документов: $e");
+      print("Ошибка документов: $e");
       return [];
     }
   }
@@ -91,6 +104,7 @@ class ApiService {
         'documents/stats/',
         options: Options(headers: {"Authorization": "Bearer $token"}),
       );
+      print("ДАННЫЕ ОТ СЕРВЕРА: ${response.data}");
       return response.data as Map<String, dynamic>;
     } catch (e) {
       print("Ошибка статистики: $e");
@@ -104,14 +118,24 @@ class ApiService {
     }
   }
 
-  Future<bool> createDocument(String title, PlatformFile file) async {
+  // Внутри класса ApiService
+  Future<bool> createDocument(
+    String title,
+    PlatformFile file, {
+    String? supplier,
+    double? amount,
+    String? category,
+  }) async {
     try {
       final token = await _storage.read(key: 'access_token');
 
-      // Подготовка данных для отправки
+      // Создаем FormData для отправки файлов и полей
       FormData formData = FormData.fromMap({
         "title": title,
-        "file": await MultipartFile.fromBytes(file.bytes!, filename: file.name),
+        "supplier": supplier ?? "",
+        "amount": amount?.toString() ?? "",
+        "category": category ?? "other",
+        "file": MultipartFile.fromBytes(file.bytes!, filename: file.name),
       });
 
       final response = await _dio.post(
@@ -122,7 +146,7 @@ class ApiService {
 
       return response.statusCode == 201;
     } catch (e) {
-      print("Ошибка при создании документа: $e");
+      print("Ошибка создания: $e");
       return false;
     }
   }
