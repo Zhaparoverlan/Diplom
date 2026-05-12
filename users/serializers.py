@@ -32,3 +32,21 @@ class RegisterCompanySerializer(serializers.Serializer):
             role=User.OWNER  # Сразу ставим роль Владельца
         )
         return user
+    
+class UserProfileSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source='company.name', read_only=True)
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'role', 'role_display', 'company_name', 'date_joined', 'password']
+        extra_kwargs = {'password': {'write_only': True}} # Пароль только на запись
+
+    def create(self, validated_data):
+        # Используем специальный метод create_user, чтобы пароль захешировался!
+        password = validated_data.pop('password', None)
+        user = User.objects.create(**validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user

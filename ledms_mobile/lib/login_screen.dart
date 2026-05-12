@@ -32,13 +32,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (success) {
       // Получаем сохраненный токен для перехода (если нужно для старого кода main.dart)
-      final token = await _apiService.getToken();
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (context) => DocsListScreen(token: token ?? ""),
-        ),
+        MaterialPageRoute(builder: (context) => DocsListScreen()),
       );
     } else {
       _showError("Неверный логин или пароль");

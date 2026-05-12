@@ -3,19 +3,20 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiService {
-  // 1. Объявляем хранилище внутри класса
   final _storage = const FlutterSecureStorage();
 
-  // 2. Настраиваем Dio
   final Dio _dio = Dio(
     BaseOptions(
+      // Подсказка: если тестируешь на реальном Android-телефоне,
+      // замени 127.0.0.1 на IP ПК в Wi‑Fi (например, 192.168.1.10) и открой порт 8000 в файрволе.
       baseUrl: 'http://127.0.0.1:8000/api/',
-      connectTimeout: const Duration(seconds: 5),
-      receiveTimeout: const Duration(seconds: 3),
+      connectTimeout: const Duration(seconds: 30),
+      // Обычные GET — короткий таймаут; для OCR см. createDocument (отдельный receiveTimeout).
+      receiveTimeout: const Duration(seconds: 30),
     ),
   );
 
-  // Метод логина
+  // --- Метод логина ---
   Future<bool> login(String username, String password) async {
     try {
       final response = await _dio.post(
@@ -40,7 +41,7 @@ class ApiService {
     }
   }
 
-  // Метод регистрации
+  // --- Метод регистрации ---
   Future<bool> registerCompany({
     required String companyName,
     required String username,
@@ -64,31 +65,86 @@ class ApiService {
     }
   }
 
-  // Получение списка документов
-  Future<List> getDocuments() async {
+  // --- Получить профиль ТЕКУЩЕГО пользователя ---
+  Future<Map<String, dynamic>> getUserProfile() async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.get(
+        'users/me/',
+        options: Options(headers: {"Authorization": "Bearer $token"}),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (e) {
+      print("Ошибка профиля: $e");
+      throw Exception('Failed to load profile');
+    }
+  }
+
+  // --- Получить список сотрудников ---
+  // --- Получить список сотрудников ---
+  Future<List> getEmployees() async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      // ИСПРАВЛЕНО: Добавлен префикс users/ чтобы путь стал /api/users/employees/
+      final response = await _dio.get(
+        'users/employees/',
+        options: Options(headers: {"Authorization": "Bearer $token"}),
+      );
+      return response.data as List;
+    } catch (e) {
+      print("Ошибка загрузки сотрудников: $e");
+      throw Exception('Failed to load employees');
+    }
+  }
+
+  // --- НОВЫЙ МЕТОД: Добавить сотрудника с ролью ---
+  Future<bool> addEmployee(Map<String, dynamic> userData) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.post(
+        'users/employees/',
+        data: userData,
+        options: Options(headers: {"Authorization": "Bearer $token"}),
+      );
+      return response.statusCode == 201;
+    } catch (e) {
+      print("Ошибка добавления сотрудника: $e");
+      return false;
+    }
+  }
+
+  Future<bool> deleteEmployee(int userId) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.delete(
+        'users/$userId/delete/', // Убедись, что путь в urls.py совпадает
+        options: Options(headers: {"Authorization": "Bearer $token"}),
+      );
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      print("Ошибка при удалении сотрудника: $e");
+      return false;
+    }
+  }
+
+  // --- Получение списка документов ---
+  Future<List> getDocuments({Map<String, dynamic>? filters}) async {
+    // Добавили аргумент {Map<String, dynamic>? filters}
     try {
       final token = await _storage.read(key: 'access_token');
       final response = await _dio.get(
         'documents/all/',
+        queryParameters: filters, // Теперь фильтры передаются правильно
         options: Options(headers: {"Authorization": "Bearer $token"}),
       );
 
-      // Логируем для отладки, чтобы видеть реальную структуру списка
-      print("DEBUG DOCUMENTS DATA: ${response.data}");
-
-      // Если сервер прислал список напрямую: [ {...}, {...} ]
-      if (response.data is List) {
-        return response.data;
-      }
-
-      // Если сервер прислал объект и список лежит внутри (например, под ключом 'results' или 'documents')
+      if (response.data is List) return response.data;
       if (response.data is Map) {
         if (response.data.containsKey('results'))
           return response.data['results'];
         if (response.data.containsKey('documents'))
           return response.data['documents'];
       }
-
       return [];
     } catch (e) {
       print("Ошибка документов: $e");
@@ -96,7 +152,7 @@ class ApiService {
     }
   }
 
-  // Получение статистики (для главного экрана)
+  // --- Статистика ---
   Future<Map<String, dynamic>> getStats() async {
     try {
       final token = await _storage.read(key: 'access_token');
@@ -104,10 +160,8 @@ class ApiService {
         'documents/stats/',
         options: Options(headers: {"Authorization": "Bearer $token"}),
       );
-      print("ДАННЫЕ ОТ СЕРВЕРА: ${response.data}");
       return response.data as Map<String, dynamic>;
     } catch (e) {
-      print("Ошибка статистики: $e");
       return {
         "total_docs": 0,
         "pending_docs": 0,
@@ -118,8 +172,8 @@ class ApiService {
     }
   }
 
-  // Внутри класса ApiService
-  Future<bool> createDocument(
+  // --- Создание документа ---
+  Future<dynamic> createDocument(
     String title,
     PlatformFile file, {
     String? supplier,
@@ -129,7 +183,6 @@ class ApiService {
     try {
       final token = await _storage.read(key: 'access_token');
 
-      // Создаем FormData для отправки файлов и полей
       FormData formData = FormData.fromMap({
         "title": title,
         "supplier": supplier ?? "",
@@ -138,20 +191,28 @@ class ApiService {
         "file": MultipartFile.fromBytes(file.bytes!, filename: file.name),
       });
 
+      // OCR + первый запуск: скачивание весов моделей на сервере может занять минуты.
       final response = await _dio.post(
         'documents/create/',
         data: formData,
-        options: Options(headers: {"Authorization": "Bearer $token"}),
+        options: Options(
+          headers: {"Authorization": "Bearer $token"},
+          receiveTimeout: const Duration(minutes: 6),
+          sendTimeout: const Duration(minutes: 3),
+        ),
       );
 
-      return response.statusCode == 201;
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return response.data as Map<String, dynamic>;
+      }
+      return null;
     } catch (e) {
-      print("Ошибка создания: $e");
-      return false;
+      print("Критическая ошибка создания/OCR: $e");
+      return null;
     }
   }
 
-  // Вспомогательные методы
+  // --- Вспомогательные методы ---
   Future<String?> getToken() async => await _storage.read(key: 'access_token');
 
   Future<void> logout() async {

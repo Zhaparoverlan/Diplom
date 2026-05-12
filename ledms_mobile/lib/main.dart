@@ -1,22 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:ledms_mobile/screens/doc_details_screen.dart';
-import 'services/api_service.dart'; // Наш сервис с Dio
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'services/api_service.dart';
 import 'login_screen.dart';
 import 'create_doc_screen.dart';
+import 'screens/doc_details_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/company_settings_screen.dart';
 
-void main() {
-  // Обязательно для инициализации плагинов (Secure Storage) перед запуском приложения
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final storage = const FlutterSecureStorage();
+  String? token = await storage.read(key: 'access_token');
 
   runApp(
     MaterialApp(
       title: 'LEDMS',
-      home: LoginScreen(),
+      home: token != null ? DocsListScreen() : LoginScreen(),
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primaryColor: const Color(0xFF2563EB),
         useMaterial3: true,
-        fontFamily: 'Inter', // Если добавил шрифт в pubspec
+        fontFamily: 'Inter',
         scaffoldBackgroundColor: const Color(0xFFF8FAFC),
       ),
     ),
@@ -24,22 +28,23 @@ void main() {
 }
 
 class DocsListScreen extends StatefulWidget {
-  // Токен теперь опционален, так как мы можем взять его из хранилища
-  final String? token;
-  DocsListScreen({this.token});
-
   @override
   _DocsListScreenState createState() => _DocsListScreenState();
 }
 
 class _DocsListScreenState extends State<DocsListScreen> {
-  final ApiService _apiService = ApiService(); // Используем наш сервис
+  final ApiService _apiService = ApiService();
+  final _storage = const FlutterSecureStorage();
+
+  // Состояние фильтров
+  Map<String, dynamic> activeFilters = {};
+  final TextEditingController _searchController = TextEditingController();
+
   List docs = [];
   Map<String, dynamic> stats = {
     "total_count": 0,
     "pending_count": 0,
     "approved_count": 0,
-    "total_expenses": 0,
   };
 
   String displayUserName = "Loading...";
@@ -53,33 +58,110 @@ class _DocsListScreenState extends State<DocsListScreen> {
     _loadAllData();
   }
 
-  // Общий метод для загрузки всех данных через сервис
   Future<void> _loadAllData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
-      // 1. Получаем документы
-      final fetchedDocs = await _apiService.getDocuments();
-      print("DOCS FROM API: $fetchedDocs");
-      // 2. Получаем статистику
+      // Передаем активные фильтры в запрос
+      final fetchedDocs = await _apiService.getDocuments(
+        filters: activeFilters,
+      );
       final fetchedStats = await _apiService.getStats();
 
-      setState(() {
-        docs = fetchedDocs;
-        stats = fetchedStats;
-
-        // Обновляем данные профиля
-        displayUserName = fetchedStats['user_name'] ?? "User";
-        displayUserRole =
-            fetchedStats['user_role']?.toString().toUpperCase() ?? "EMPLOYEE";
-        if (displayUserName.isNotEmpty) {
-          userInitial = displayUserName[0].toUpperCase();
-        }
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          docs = fetchedDocs;
+          stats = fetchedStats;
+          displayUserName = fetchedStats['user_name'] ?? "User";
+          displayUserRole =
+              fetchedStats['user_role']?.toString().toUpperCase() ?? "EMPLOYEE";
+          if (displayUserName.isNotEmpty) {
+            userInitial = displayUserName[0].toUpperCase();
+          }
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       print("Error loading data: $e");
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  // Виджет фильтрации (теперь внутри класса)
+  Widget _buildAdvancedFilter() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: "Поиск документов...",
+              prefixIcon: const Icon(Icons.search, size: 20),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+            ),
+            onChanged: (val) {
+              activeFilters['search'] = val;
+              _loadAllData(); // Живой поиск
+            },
+          ),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              _filterChip("Все", null, 'status'),
+              _filterChip("Ожидание", "pending", 'status'),
+              _filterChip("Одобрено", "approved", 'status'),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text("|", style: TextStyle(color: Colors.grey)),
+              ),
+              // Твои новые категории из выпадающего списка
+              _filterChip("Закуп", "purchase", 'category'),
+              _filterChip("Аренда", "rent", 'category'),
+              _filterChip("Зарплата", "salary", 'category'),
+              _filterChip("Коммуналка", "utilities", 'category'),
+              _filterChip("Прочее", "other", 'category'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _filterChip(String label, String? value, String key) {
+    bool isSelected = activeFilters[key] == value;
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+        selected: isSelected,
+        onSelected: (selected) {
+          setState(() {
+            if (isSelected) {
+              // Если уже выбрано — убираем фильтр (функция "второго нажатия")
+              activeFilters.remove(key);
+            } else {
+              // Если не выбрано — ставим новое значение
+              activeFilters[key] = value;
+            }
+          });
+          _loadAllData();
+        },
+        selectedColor: const Color(0xFF2563EB).withOpacity(0.1),
+        checkmarkColor: const Color(0xFF2563EB),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
   }
 
   @override
@@ -91,60 +173,11 @@ class _DocsListScreenState extends State<DocsListScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none),
-            onPressed: () {},
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadAllData),
         ],
       ),
-      drawer: Drawer(
-        child: Column(
-          children: [
-            UserAccountsDrawerHeader(
-              decoration: const BoxDecoration(color: Color(0xFF2563EB)),
-              accountName: Text(
-                displayUserName,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              accountEmail: Text(
-                displayUserRole,
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
-              currentAccountPicture: CircleAvatar(
-                backgroundColor: Colors.white,
-                child: Text(
-                  userInitial,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    color: Color(0xFF2563EB),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            _buildDrawerItem(Icons.dashboard_outlined, "Dashboard", true),
-            _buildDrawerItem(Icons.description_outlined, "Documents", false),
-            const Spacer(),
-            const Divider(),
-            _buildDrawerItem(
-              Icons.logout,
-              "Logout",
-              false,
-              onTap: () async {
-                // Добавь метод logout в ApiService, чтобы стирать токены
-                // await _apiService.logout();
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (context) => LoginScreen()),
-                );
-              },
-            ),
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
+      drawer: _buildDrawer(),
       body: RefreshIndicator(
         onRefresh: _loadAllData,
         child: SingleChildScrollView(
@@ -154,8 +187,10 @@ class _DocsListScreenState extends State<DocsListScreen> {
             children: [
               _buildHeader(),
               _buildStatsRow(),
+              const SizedBox(height: 10),
+              _buildAdvancedFilter(), // Вставляем фильтры сюда
               const Padding(
-                padding: EdgeInsets.fromLTRB(20, 25, 20, 10),
+                padding: EdgeInsets.fromLTRB(20, 15, 20, 10),
                 child: Text(
                   "Recent Documents",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -181,23 +216,13 @@ class _DocsListScreenState extends State<DocsListScreen> {
     );
   }
 
-  // --- Вспомогательные методы UI (разбил для чистоты) ---
-
+  // Остальные вспомогательные методы UI
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.all(20.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Welcome, $displayUserName!",
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-          const Text(
-            "Check your latest updates",
-            style: TextStyle(color: Colors.grey),
-          ),
-        ],
+      child: Text(
+        "Welcome, $displayUserName!",
+        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -213,14 +238,14 @@ class _DocsListScreenState extends State<DocsListScreen> {
             const Color(0xFF2563EB),
             Icons.folder_outlined,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           _buildStatCard(
             "Pending",
             stats['pending_count'].toString(),
             Colors.orange,
             Icons.hourglass_empty,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           _buildStatCard(
             "Approved",
             stats['approved_count'].toString(),
@@ -232,33 +257,6 @@ class _DocsListScreenState extends State<DocsListScreen> {
     );
   }
 
-  Widget _buildDocsList() {
-    if (_isLoading && docs.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(50),
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
-    if (docs.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Text("No documents found"),
-        ),
-      );
-    }
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: docs.length,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      separatorBuilder: (context, index) => const SizedBox(height: 10),
-      itemBuilder: (context, index) => _buildDocTile(docs[index]),
-    );
-  }
-
   Widget _buildStatCard(
     String title,
     String value,
@@ -267,32 +265,45 @@ class _DocsListScreenState extends State<DocsListScreen> {
   ) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(15),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 10),
+            Icon(icon, color: color, size: 18),
             Text(
               value,
               style: TextStyle(
-                fontSize: 20,
+                fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: color,
               ),
             ),
             Text(
               title,
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              style: const TextStyle(color: Colors.grey, fontSize: 10),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDocsList() {
+    if (_isLoading && docs.isEmpty)
+      return const Center(child: CircularProgressIndicator());
+    if (docs.isEmpty) return const Center(child: Text("No documents found"));
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: docs.length,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) => _buildDocTile(docs[index]),
     );
   }
 
@@ -304,52 +315,76 @@ class _DocsListScreenState extends State<DocsListScreen> {
         border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: ListTile(
-        leading: const CircleAvatar(
-          backgroundColor: Color(0xFFF1F5F9),
-          child: Icon(
-            Icons.description_outlined,
-            color: Colors.blueGrey,
-            size: 20,
-          ),
-        ),
         title: Text(
           doc['title'] ?? 'No Title',
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Text(
-          "Status: ${doc['status_label'] ?? doc['status'] ?? 'N/A'}",
-        ),
+        subtitle: Text("Status: ${doc['status_label'] ?? doc['status']}"),
         trailing: const Icon(Icons.chevron_right, size: 18),
-        onTap: () {
-          Navigator.push(
+        onTap: () async {
+          final refresh = await Navigator.push(
             context,
             MaterialPageRoute(builder: (context) => DocDetailsScreen(doc: doc)),
           );
+          if (refresh == true) _loadAllData();
         },
       ),
     );
   }
 
-  Widget _buildDrawerItem(
-    IconData icon,
-    String title,
-    bool isSelected, {
-    VoidCallback? onTap,
-  }) {
-    return ListTile(
-      leading: Icon(
-        icon,
-        color: isSelected ? const Color(0xFF2563EB) : Colors.grey,
+  Widget _buildDrawer() {
+    return Drawer(
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+            decoration: const BoxDecoration(color: Color(0xFF2563EB)),
+            accountName: Text(displayUserName),
+            accountEmail: Text(displayUserRole),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Text(
+                userInitial,
+                style: const TextStyle(color: Color(0xFF2563EB)),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text("Profile"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => ProfileScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.business_outlined),
+            title: const Text("Company"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => CompanySettingsScreen()),
+              );
+            },
+          ),
+          const Spacer(),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text("Logout"),
+            onTap: () async {
+              await _storage.delete(key: 'access_token');
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => LoginScreen()),
+                (r) => false,
+              );
+            },
+          ),
+        ],
       ),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: isSelected ? const Color(0xFF2563EB) : Colors.black87,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        ),
-      ),
-      selected: isSelected,
-      onTap: onTap,
     );
   }
 }

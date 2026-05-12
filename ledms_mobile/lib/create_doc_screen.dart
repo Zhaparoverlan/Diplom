@@ -17,9 +17,11 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
 
   final ApiService _apiService = ApiService();
 
-  String _selectedCategory = 'other'; // Значение по умолчанию
+  String _selectedCategory = 'other';
   FilePickerResult? _selectedFile;
   bool _isUploading = false;
+  bool _isDataRecognized = false; // Флаг: получили ли мы данные от OCR
+  String? _recognizedRawText; // Распознанный текст с сервера (raw_text)
 
   // Список категорий для выпадающего меню
   final List<Map<String, String>> _categories = [
@@ -30,7 +32,7 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
     {'value': 'other', 'label': 'Прочее'},
   ];
 
-  // Выбор файла из галереи/памяти
+  // Выбор файла
   Future<void> selectFile() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -38,24 +40,25 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
         allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'png'],
         withData: true,
       );
-      if (result != null) setState(() => _selectedFile = result);
+      if (result != null) {
+        setState(() {
+          _selectedFile = result;
+          _isDataRecognized = false; // Сбрасываем флаг, если файл изменился
+          _recognizedRawText = null;
+        });
+      }
     } catch (e) {
       debugPrint("Ошибка выбора файла: $e");
     }
   }
 
-  // Функция "Сделать фото"
-  // Обновленная функция "Сделать фото"
+  // Сделать фото
   Future<void> takePhoto() async {
-    // 1. Проверяем статус разрешения
     var status = await Permission.camera.status;
-
     if (status.isDenied || status.isLimited) {
-      // 2. Если запрещено (или еще не спрашивали), запрашиваем
       status = await Permission.camera.request();
     }
 
-    // 3. Если разрешение получено (или уже было), открываем камеру
     if (status.isGranted) {
       final ImagePicker picker = ImagePicker();
       final XFile? photo = await picker.pickImage(source: ImageSource.camera);
@@ -66,16 +69,15 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
           _selectedFile = FilePickerResult([
             PlatformFile(name: photo.name, size: bytes.length, bytes: bytes),
           ]);
+          _isDataRecognized = false;
+          _recognizedRawText = null;
         });
       }
     } else if (status.isPermanentlyDenied) {
-      // Если пользователь запретил навсегда — отправляем в настройки
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text(
-              "Нужно разрешение на камеру. Включите его в настройках.",
-            ),
+            content: const Text("Нужно разрешение на камеру."),
             action: SnackBarAction(
               label: "Настройки",
               onPressed: () => openAppSettings(),
@@ -86,7 +88,8 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
     }
   }
 
-  Future<void> uploadDocument() async {
+  // Основная функция загрузки и распознавания
+  Future<void> handleUpload() async {
     if (_titleController.text.isEmpty || _selectedFile == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Введите название и выберите файл")),
@@ -94,10 +97,15 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
       return;
     }
 
+    if (_isDataRecognized) {
+      Navigator.pop(context, true);
+      return;
+    }
+
     setState(() => _isUploading = true);
 
-    // Отправляем данные в ApiService (убедись, что обновил метод в api_service.dart)
-    final success = await _apiService.createDocument(
+    // Явно указываем dynamic, чтобы Dart не ругался на скобки []
+    final dynamic responseData = await _apiService.createDocument(
       _titleController.text,
       _selectedFile!.files.first,
       supplier: _supplierController.text,
@@ -107,17 +115,38 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
 
     if (mounted) {
       setState(() => _isUploading = false);
-      if (success) {
-        Navigator.pop(context, true);
+
+      // Проверяем, что ответ не null и не false
+      if (responseData != null && responseData != false) {
+        setState(() {
+          // Безопасно извлекаем данные из ответа API (OCR на сервере: raw_text, amount, supplier)
+          if (responseData['amount'] != null) {
+            _amountController.text = responseData['amount'].toString();
+          }
+          if (responseData['supplier'] != null) {
+            _supplierController.text = responseData['supplier'].toString();
+          }
+          if (responseData['raw_text'] != null &&
+              responseData['raw_text'].toString().trim().isNotEmpty) {
+            _recognizedRawText = responseData['raw_text'].toString();
+          }
+          _isDataRecognized = true;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Данные распознаны! Проверьте поля."),
+            backgroundColor: Colors.green,
+          ),
+        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Ошибка при создании документа")),
+          const SnackBar(content: Text("Ошибка при обработке файла")),
         );
       }
     }
   }
 
-  // Вспомогательный виджет для заголовков полей
   Widget _buildLabel(String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
@@ -128,7 +157,6 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
     );
   }
 
-  // Общий стиль для всех Input
   InputDecoration _inputStyle(String hint) {
     return InputDecoration(
       filled: true,
@@ -273,15 +301,39 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
                 ),
               ),
 
+            if (_recognizedRawText != null &&
+                _recognizedRawText!.trim().isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _buildLabel("Recognized text (preview)"),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Text(
+                  _recognizedRawText!,
+                  maxLines: 10,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, height: 1.35),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 40),
 
             SizedBox(
               width: double.infinity,
               height: 55,
               child: ElevatedButton(
-                onPressed: _isUploading ? null : uploadDocument,
+                onPressed: _isUploading ? null : handleUpload,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
+                  backgroundColor:
+                      _isDataRecognized
+                          ? Colors.green
+                          : const Color(0xFF2563EB),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -289,9 +341,11 @@ class _CreateDocScreenState extends State<CreateDocScreen> {
                 child:
                     _isUploading
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text(
-                          "Create Document",
-                          style: TextStyle(
+                        : Text(
+                          _isDataRecognized
+                              ? "Confirm & Save"
+                              : "Create & Analyze",
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
                             fontWeight: FontWeight.bold,

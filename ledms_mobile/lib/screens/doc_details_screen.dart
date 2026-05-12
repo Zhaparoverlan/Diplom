@@ -1,126 +1,237 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+// Замени 'your_project_name' на название твоего пакета (как в pubspec.yaml)
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-class DocDetailsScreen extends StatelessWidget {
+class DocDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> doc;
+  // Если тестируешь на эмуляторе Android, используй 10.0.2.2 вместо 127.0.0.1
+  final String baseUrl = "http://127.0.0.1:8000/api";
 
   const DocDetailsScreen({super.key, required this.doc});
 
-  // Функция-помощник для определения иконки
-  Widget _getFileIcon(String? url) {
-    if (url == null || url.isEmpty) {
-      return const Icon(
-        Icons.insert_drive_file_outlined,
-        color: Colors.grey,
-        size: 48,
+  @override
+  State<DocDetailsScreen> createState() => _DocDetailsScreenState();
+}
+
+class _DocDetailsScreenState extends State<DocDetailsScreen> {
+  late TextEditingController _amountController;
+  late TextEditingController _supplierController;
+  bool _isSaving = false;
+
+  // Создаем хранилище, чтобы достать токен
+  final _storage = const FlutterSecureStorage();
+
+  @override
+  void initState() {
+    super.initState();
+    _amountController = TextEditingController(
+      text: widget.doc['amount'].toString(),
+    );
+    _supplierController = TextEditingController(
+      text: widget.doc['supplier'] ?? '',
+    );
+  }
+
+  // --- МЕТОДЫ API ---
+
+  // Универсальный метод для получения токена
+  Future<String?> _getToken() async {
+    return await _storage.read(key: 'access_token');
+  }
+
+  Future<void> _updateDocument(String status) async {
+    // 1. Достаем токен СТРОГО перед запросом
+    final token = await _storage.read(key: 'access_token');
+
+    // 2. Печатаем в консоль ДЛЯ СЕБЯ (проверь это в VS Code / Android Studio)
+    print("TOKEN: $token");
+
+    if (token == null) {
+      print("ОШИБКА: Токена нет в хранилище!");
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final response = await http.patch(
+        Uri.parse('${widget.baseUrl}/documents/${widget.doc['id']}/'),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token", // ПРОВЕРЬ ПРОБЕЛ ПОСЛЕ Bearer
+        },
+        body: jsonEncode({
+          "amount": _amountController.text,
+          "supplier": _supplierController.text,
+          "status": status,
+        }),
       );
-    }
 
-    String extension = url.split('.').last.toLowerCase();
+      print("RESPONSE CODE: ${response.statusCode}");
+      print("RESPONSE BODY: ${response.body}");
 
-    switch (extension) {
-      case 'pdf':
-        return const Icon(
-          Icons.picture_as_pdf,
-          color: Colors.redAccent,
-          size: 48,
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Успешно!'),
+            backgroundColor: Colors.green,
+          ),
         );
-      case 'xls':
-      case 'xlsx':
-        return const Icon(Icons.description, color: Colors.green, size: 48);
-      case 'txt':
-        return const Icon(
-          Icons.article_outlined,
-          color: Colors.blueGrey,
-          size: 48,
-        );
-      case 'jpg':
-      case 'jpeg':
-      case 'png':
-        return const Icon(Icons.image_outlined, color: Colors.purple, size: 48);
-      case 'doc':
-      case 'docx':
-        return const Icon(Icons.description, color: Colors.blue, size: 48);
-      default:
-        return const Icon(
-          Icons.insert_drive_file_outlined,
-          color: Colors.grey,
-          size: 48,
-        );
+        Navigator.pop(context, true);
+      } else {
+        print("ОШИБКА СЕРВЕРА: ${response.body}");
+      }
+    } catch (e) {
+      print("ERROR: $e");
+    } finally {
+      setState(() => _isSaving = false);
     }
   }
 
-  // Вспомогательная функция для текста типа файла
-  String _getFileExtensionText(String? url) {
-    if (url == null || !url.contains('.')) return "Unknown";
-    return url.split('.').last.toUpperCase();
+  Future<void> _deleteDocument() async {
+    final bool confirm = await showDialog(
+      context: context,
+      builder:
+          (ctx) => AlertDialog(
+            title: const Text("Удалить документ?"),
+            content: const Text("Это действие нельзя отменить."),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("Отмена"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text(
+                  "Удалить",
+                  style: TextStyle(color: Colors.red),
+                ),
+              ),
+            ],
+          ),
+    );
+
+    if (confirm == true) {
+      setState(() => _isSaving = true);
+      try {
+        final token = await _getToken();
+        final response = await http.delete(
+          Uri.parse('${widget.baseUrl}/documents/${widget.doc['id']}/'),
+          headers: {"Authorization": "Bearer $token"},
+        );
+
+        if (response.statusCode == 204 || response.statusCode == 200) {
+          _showSnackBar('Документ удален', Colors.blueGrey);
+          Navigator.pop(context, true);
+        }
+      } catch (e) {
+        print("Delete error: $e");
+      } finally {
+        setState(() => _isSaving = false);
+      }
+    }
   }
+
+  void _showSnackBar(String message, Color color) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+  }
+
+  // --- ВЕРСТКА ---
 
   @override
   Widget build(BuildContext context) {
     String formattedDate = "N/A";
-    if (doc['created_at'] != null) {
-      DateTime dt = DateTime.parse(doc['created_at']).toLocal();
+    if (widget.doc['created_at'] != null) {
+      DateTime dt = DateTime.parse(widget.doc['created_at']).toLocal();
       formattedDate = DateFormat('MMMM d, yyyy • HH:mm').format(dt);
     }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
         title: const Text(
-          "Back to Documents",
-          style: TextStyle(color: Colors.black87, fontSize: 16),
+          "Детали документа",
+          style: TextStyle(color: Colors.black87),
         ),
-        backgroundColor: Colors.transparent,
+        backgroundColor: Colors.white,
         elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            onPressed: _deleteDocument,
+          ),
+        ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildMainInfoCard(context, formattedDate),
-            const SizedBox(height: 25),
-            const Text(
-              "Распознанный текст / Описание",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade200),
+      body:
+          _isSaving
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildStatusBanner(),
+                    const SizedBox(height: 20),
+                    _buildEditableCard(formattedDate),
+                    const SizedBox(height: 25),
+                    const Text(
+                      "Превью изображения",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildImagePreview(),
+                    const SizedBox(height: 25),
+                    _buildRawTextSection(),
+                    const SizedBox(height: 100),
+                  ],
+                ),
               ),
-              child: Text(
-                doc['raw_text'] ?? "Текст еще не распознан или описание пустое",
-                style: TextStyle(color: Colors.grey.shade700, height: 1.5),
-              ),
+      bottomNavigationBar: _buildBottomActions(),
+    );
+  }
+
+  Widget _buildStatusBanner() {
+    bool isApproved = widget.doc['status'] == 'approved';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color:
+            isApproved
+                ? Colors.green.withOpacity(0.1)
+                : Colors.orange.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isApproved ? Icons.check_circle : Icons.pending,
+            color: isApproved ? Colors.green : Colors.orange,
+          ),
+          const SizedBox(width: 10),
+          Text(
+            isApproved ? "ОДОБРЕНО" : "ЧЕРНОВИК / ОЖИДАЕТ ПРОВЕРКИ",
+            style: TextStyle(
+              color: isApproved ? Colors.green : Colors.orange,
+              fontWeight: FontWeight.bold,
             ),
-            //
-            const SizedBox(height: 25),
-            const Text(
-              "Document Preview",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 15),
-            _buildPreviewPlaceholder(),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildMainInfoCard(BuildContext context, String date) {
+  Widget _buildEditableCard(String date) {
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -129,155 +240,124 @@ class DocDetailsScreen extends StatelessWidget {
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      doc['title'] ?? 'Untitled',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _buildStatusBadge(doc['status'] ?? 'draft'),
-                  ],
-                ),
-              ),
-              // ПРИМЕНЕНИЕ: Умная иконка вместо статичной
-              _getFileIcon(doc['file']),
-            ],
+          TextField(
+            controller: _supplierController,
+            decoration: const InputDecoration(
+              labelText: "Поставщик",
+              prefixIcon: Icon(Icons.business),
+            ),
+          ),
+          const SizedBox(height: 15),
+          TextField(
+            controller: _amountController,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueAccent,
+            ),
+            decoration: const InputDecoration(
+              labelText: "Сумма (сом)",
+              prefixIcon: Icon(Icons.attach_money),
+            ),
           ),
           const Divider(height: 40),
-          _buildInfoRow(Icons.person_outline, "Author", "Erlan (You)"),
-          const SizedBox(height: 16),
-          _buildInfoRow(Icons.calendar_today_outlined, "Created Date", date),
-          const SizedBox(height: 16),
           _buildInfoRow(
-            Icons.file_present_outlined,
-            "File Type",
-            _getFileExtensionText(doc['file']), // Динамический текст расширения
+            Icons.person_outline,
+            "Загрузил",
+            widget.doc['author_name'] ?? "Erlan",
           ),
-          const SizedBox(height: 30),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () async {
-                    final Uri _url = Uri.parse(
-                      doc['file'],
-                    ); // Получаем URL файла из Django
-                    if (!await launchUrl(
-                      _url,
-                      mode: LaunchMode.externalApplication,
-                    )) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Could not open file')),
-                      );
-                    }
-                  },
-                  icon: const Icon(Icons.download),
-                  label: const Text("Download"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    // Логика предпросмотра
-                  },
-                  icon: const Icon(Icons.remove_red_eye_outlined),
-                  label: const Text("Preview"),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          const SizedBox(height: 12),
+          _buildInfoRow(Icons.calendar_today_outlined, "Дата", date),
         ],
       ),
     );
   }
 
-  // ... (Остальные методы _buildInfoRow, _buildStatusBadge и _buildPreviewPlaceholder остаются без изменений)
+  Widget _buildImagePreview() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child:
+          widget.doc['file'] != null
+              ? Image.network(
+                widget.doc['file'],
+                width: double.infinity,
+                fit: BoxFit.contain,
+                errorBuilder:
+                    (context, error, stackTrace) => Container(
+                      height: 200,
+                      color: Colors.black12,
+                      child: Center(child: Text("Ошибка загрузки фото")),
+                    ),
+              )
+              : Container(
+                height: 200,
+                color: Colors.grey[200],
+                child: const Icon(Icons.image_not_supported),
+              ),
+    );
+  }
 
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(
+  Widget _buildRawTextSection() {
+    return ExpansionTile(
+      title: const Text(
+        "Распознанный текст (AI)",
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
       children: [
-        Icon(icon, size: 20, color: Colors.grey),
-        const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-            Text(
-              value,
-              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-            ),
-          ],
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          color: Colors.grey[100],
+          child: Text(
+            widget.doc['raw_text'] ?? "Текст не распознан",
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildStatusBadge(String status) {
-    Color color = status == 'draft' ? Colors.blueGrey : Colors.orange;
+  Widget _buildBottomActions() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Colors.black12)),
       ),
-      child: Text(
-        status.toUpperCase(),
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => _updateDocument('pending'),
+              child: const Text("Сохранить"),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => _updateDocument('approved'),
+              child: const Text("Одобрить"),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildPreviewPlaceholder() {
-    return Container(
-      width: double.infinity,
-      height: 400,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.description_outlined,
-            size: 64,
-            color: Colors.grey.shade300,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            "Preview not available for this format yet",
-            style: TextStyle(color: Colors.grey.shade500),
-          ),
-        ],
-      ),
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: Colors.grey),
+        const SizedBox(width: 10),
+        Text("$label: ", style: const TextStyle(color: Colors.grey)),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
+      ],
     );
   }
 }
