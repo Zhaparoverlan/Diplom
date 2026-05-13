@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from typing import Any, List, Tuple
 
 import cv2
@@ -38,7 +37,7 @@ def _get_ocr_engine():
         return None
 
     _OCR_ENGINE = PaddleOCR(
-        use_angle_cls=True,
+        use_angle_cls=False,
         text_detection_model_name=OCR_DET_MODEL_NAME,
         text_recognition_model_name=OCR_REC_MODEL_NAME,
         enable_mkldnn=False,
@@ -124,21 +123,26 @@ def _run_ocr(ocr, image_input: Any) -> Any:
     predict = getattr(ocr, "predict", None)
     if callable(predict):
         return predict(image_input)
-    try:
-        return ocr.ocr(image_input, cls=True)
-    except TypeError:
-        return ocr.ocr(image_input)
+    return ocr.ocr(image_input)
 
 
 def _preprocess_bgr(img: np.ndarray) -> np.ndarray:
-    """Resize по ширине до 1500 px + адаптивный порог (контраст для OCR)."""
+    """Resize: cap at 1024 px wide (PP-OCRv5 mobile sweet-spot), floor at 800 px.
+    Adaptive threshold blockSize 15 — smaller kernel is faster and preserves dense text."""
     h, w = img.shape[:2]
-    if w > 1500:
-        scale = 1500.0 / w
+    if w > 1024:
+        scale = 1024.0 / w
         img = cv2.resize(
             img,
-            (1500, max(1, int(round(h * scale)))),
+            (1024, max(1, int(round(h * scale)))),
             interpolation=cv2.INTER_AREA,
+        )
+    elif w < 800:
+        scale = 800.0 / w
+        img = cv2.resize(
+            img,
+            (800, max(1, int(round(h * scale)))),
+            interpolation=cv2.INTER_LINEAR,
         )
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     bin_img = cv2.adaptiveThreshold(
@@ -146,7 +150,7 @@ def _preprocess_bgr(img: np.ndarray) -> np.ndarray:
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        35,
+        15,
         11,
     )
     return cv2.cvtColor(bin_img, cv2.COLOR_GRAY2BGR)
@@ -154,7 +158,8 @@ def _preprocess_bgr(img: np.ndarray) -> np.ndarray:
 
 def extract_text_from_image(image_path: str) -> Tuple[str, float]:
     """
-    Читает файл с диска, препроцессит (OpenCV), подаёт в Paddle predict, возвращает (text, avg_conf).
+    Читает файл с диска, препроцессит (OpenCV), подаёт numpy array в Paddle predict.
+    Temp-файл больше не создаётся — predict() принимает ndarray напрямую.
     """
     ocr = _get_ocr_engine()
     if ocr is None:
@@ -162,30 +167,17 @@ def extract_text_from_image(image_path: str) -> Tuple[str, float]:
 
     buf = np.fromfile(image_path, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-    tmp_path = None
-    try:
-        if img is not None:
-            proc = _preprocess_bgr(img)
-            fd, tmp_path = tempfile.mkstemp(suffix="_ocr_in.png", prefix="ledms_")
-            os.close(fd)
-            cv2.imencode(".png", proc)[1].tofile(tmp_path)
-            inp = tmp_path
-        else:
-            inp = image_path
 
-        raw = _run_ocr(ocr, inp)
-        full_text, avg_conf = _parse_ocr_result(raw)
+    # Pass preprocessed ndarray directly; fall back to raw path only if decode failed
+    inp = _preprocess_bgr(img) if img is not None else image_path
 
-        logger.info(
-            "OCR done confidence=%.4f text_len=%d input=%s",
-            avg_conf,
-            len(full_text),
-            image_path,
-        )
-        return full_text, avg_conf
-    finally:
-        if tmp_path and os.path.isfile(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    raw = _run_ocr(ocr, inp)
+    full_text, avg_conf = _parse_ocr_result(raw)
+
+    logger.info(
+        "OCR done confidence=%.4f text_len=%d input=%s",
+        avg_conf,
+        len(full_text),
+        image_path,
+    )
+    return full_text, avg_conf
