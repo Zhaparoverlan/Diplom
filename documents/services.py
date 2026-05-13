@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-# До импорта paddle/paddleocr: обход NotImplementedError oneDNN+PIR на CPU (Windows).
-# См. https://github.com/PaddlePaddle/Paddle/issues/77340
-import os
-
-os.environ.setdefault("FLAGS_use_mkldnn", "0")
-
 import logging
+import os
+import tempfile
 from typing import Any, List, Tuple
+
+import cv2
+import numpy as np
+
+# Must be set before PaddlePaddle is imported to avoid ConvertPirAttribute2RuntimeAttribute
+os.environ.setdefault("FLAGS_enable_pir_api", "0")
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
 
 try:
     from paddleocr import PaddleOCR
@@ -16,15 +19,15 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+# Загружаемые модели (для отчёта / диплома) — см. _get_ocr_engine()
+OCR_DET_MODEL_NAME = "PP-OCRv5_mobile_det"
+OCR_REC_MODEL_NAME = "cyrillic_PP-OCRv5_mobile_rec"
+
 _OCR_ENGINE = None
 
 
 def _get_ocr_engine():
-    """Один экземпляр PaddleOCR на процесс (lazy init).
-
-    enable_mkldnn=False — критично для Paddle 3.3+ на CPU (иначе падает predict).
-    Не передавать use_gpu / show_log (ломает конструктор в paddleocr 3.x).
-    """
+    """Singleton PaddleOCR engine (PP-OCRv5 mobile, CPU). PIR and mkldnn disabled via env."""
     global _OCR_ENGINE
 
     if _OCR_ENGINE is not None:
@@ -34,27 +37,18 @@ def _get_ocr_engine():
         logger.error("Пакет paddleocr не установлен: pip install paddleocr paddlepaddle")
         return None
 
-    try:
-        import paddle
-
-        paddle.set_flags({"FLAGS_use_mkldnn": False})
-    except Exception:
-        pass
-
-    try:
-        _OCR_ENGINE = PaddleOCR(
-            lang="ru",
-            use_angle_cls=True,
-            enable_mkldnn=False,
-        )
-    except (ValueError, TypeError):
-        # Старый paddleocr 2.x без enable_mkldnn в общих аргументах
-        _OCR_ENGINE = PaddleOCR(lang="ru", use_angle_cls=True)
+    _OCR_ENGINE = PaddleOCR(
+        use_angle_cls=True,
+        text_detection_model_name=OCR_DET_MODEL_NAME,
+        text_recognition_model_name=OCR_REC_MODEL_NAME,
+        enable_mkldnn=False,
+        device="cpu",
+    )
+    logger.info("OCR engine: det=%s rec=%s", OCR_DET_MODEL_NAME, OCR_REC_MODEL_NAME)
     return _OCR_ENGINE
 
 
 def _collect_from_paddlex_page(page: Any, lines: List[str], confs: List[float]) -> None:
-    """Формат PaddleX / paddleocr 3.x: dict или OCRResult с rec_texts / rec_scores."""
     if page is None:
         return
     get = getattr(page, "get", None)
@@ -88,7 +82,6 @@ def _collect_from_paddlex_page(page: Any, lines: List[str], confs: List[float]) 
 
 
 def _collect_from_legacy_page(page: Any, lines: List[str], confs: List[float]) -> None:
-    """Старый формат PP-OCR 2.x: список элементов [box, (text, confidence)]."""
     if not isinstance(page, (list, tuple)):
         return
     for item in page:
@@ -110,7 +103,6 @@ def _collect_from_legacy_page(page: Any, lines: List[str], confs: List[float]) -
 
 
 def _parse_ocr_result(result: Any) -> Tuple[str, float]:
-    """Разбор ответа predict()/ocr() для PaddleOCR 2.x и 3.x (PaddleX)."""
     lines: List[str] = []
     confs: List[float] = []
 
@@ -128,32 +120,72 @@ def _parse_ocr_result(result: Any) -> Tuple[str, float]:
     return full_text, avg_conf
 
 
-def _run_ocr(ocr, image_path: str) -> Any:
-    """Вызов инференса без cls= (в PaddleX predict() его нет)."""
+def _run_ocr(ocr, image_input: Any) -> Any:
     predict = getattr(ocr, "predict", None)
     if callable(predict):
-        return predict(image_path)
+        return predict(image_input)
     try:
-        return ocr.ocr(image_path, cls=True)
+        return ocr.ocr(image_input, cls=True)
     except TypeError:
-        return ocr.ocr(image_path)
+        return ocr.ocr(image_input)
+
+
+def _preprocess_bgr(img: np.ndarray) -> np.ndarray:
+    """Resize по ширине до 1500 px + адаптивный порог (контраст для OCR)."""
+    h, w = img.shape[:2]
+    if w > 1500:
+        scale = 1500.0 / w
+        img = cv2.resize(
+            img,
+            (1500, max(1, int(round(h * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    bin_img = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        35,
+        11,
+    )
+    return cv2.cvtColor(bin_img, cv2.COLOR_GRAY2BGR)
 
 
 def extract_text_from_image(image_path: str) -> Tuple[str, float]:
     """
-    Путь к изображению → (full_text, средняя confidence по строкам).
+    Читает файл с диска, препроцессит (OpenCV), подаёт в Paddle predict, возвращает (text, avg_conf).
     """
     ocr = _get_ocr_engine()
     if ocr is None:
         return "", 0.0
 
-    raw = _run_ocr(ocr, image_path)
-    full_text, avg_conf = _parse_ocr_result(raw)
+    buf = np.fromfile(image_path, dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    tmp_path = None
+    try:
+        if img is not None:
+            proc = _preprocess_bgr(img)
+            fd, tmp_path = tempfile.mkstemp(suffix="_ocr_in.png", prefix="ledms_")
+            os.close(fd)
+            cv2.imencode(".png", proc)[1].tofile(tmp_path)
+            inp = tmp_path
+        else:
+            inp = image_path
 
-    logger.info(
-        "OCR Paddle confidence=%.4f image=%s text_len=%d",
-        avg_conf,
-        image_path,
-        len(full_text),
-    )
-    return full_text, avg_conf
+        raw = _run_ocr(ocr, inp)
+        full_text, avg_conf = _parse_ocr_result(raw)
+
+        logger.info(
+            "OCR done confidence=%.4f text_len=%d input=%s",
+            avg_conf,
+            len(full_text),
+            image_path,
+        )
+        return full_text, avg_conf
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

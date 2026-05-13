@@ -4,6 +4,8 @@ class Company(models.Model):
     name = models.CharField("Название компании", max_length=255)
     address = models.TextField("Адрес", blank=True, null=True)
     inn = models.CharField("ИНН", max_length=14, unique=True, blank=True, null=True)
+    logo = models.ImageField("Логотип", upload_to='company_logos/', null=True, blank=True)
+    banner = models.ImageField("Баннер", upload_to='company_banners/', null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

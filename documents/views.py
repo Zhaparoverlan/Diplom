@@ -8,7 +8,7 @@ from django.db.models import Sum, Q
 from .models import Document
 from .serializers import DocumentSerializer
 from .services import extract_text_from_image
-import re
+from .receipt_parser import extract_amount_from_receipt_text, extract_supplier_from_receipt_text
 
 logger = logging.getLogger(__name__)
 
@@ -64,26 +64,6 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
         headers = self.get_success_headers(output.data)
         return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def extract_data_from_text(self, text):
-        # Сумма: типичные подписи на чеках (рус/англ); дальше число с пробелами/запятыми
-        amount_pattern = (
-            r'(?:Итого|ИТОГО|Сумма|Всего|Total|ИТОГ|К\s*оплате|'
-            r'Всего\s*к\s*оплате|Сумма\s*к\s*оплате|Amount)[:\s\=\-\_]*([\d\s\.,\'’]+)'
-        )
-        match = re.search(amount_pattern, text, re.IGNORECASE)
-        if match:
-            raw_val = match.group(1).strip()
-            raw_val = raw_val.replace(',', '.')
-            clean_amount = re.sub(r'[^\d.]', '', raw_val)
-            if clean_amount.count('.') > 1:
-                parts = clean_amount.split('.')
-                clean_amount = "".join(parts[:-1]) + "." + parts[-1]
-            try:
-                return float(clean_amount)
-            except ValueError:
-                return 0.0
-        return 0.0
-    
     def perform_create(self, serializer):
         # При создании ставим статус draft и привязываем к юзеру
         instance = serializer.save(
@@ -102,13 +82,13 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
                 if extracted_text:
                     instance.raw_text = extracted_text
                     instance._ocr_confidence = ocr_conf
-                    found_amount = self.extract_data_from_text(extracted_text)
+                    found_amount = extract_amount_from_receipt_text(extracted_text)
                     if found_amount > 0:
                         instance.amount = found_amount
 
-                    lines = [line.strip() for line in extracted_text.split('\n') if len(line.strip()) > 5]
-                    if lines:
-                        instance.supplier = lines[0][:100]
+                    supplier_line = extract_supplier_from_receipt_text(extracted_text)
+                    if supplier_line:
+                        instance.supplier = supplier_line[:255]
 
                     instance.save()
                     logger.info(

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../services/api_service.dart'; // Импортируем наш сервис
-import 'screens/register_screen.dart'; // Импортируем экран регистрации
-import 'main.dart';
+import 'screens/docs_list_screen.dart';
+import 'screens/register_screen.dart';
+import 'services/api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -102,7 +102,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 _buildTextField(
                   controller: _userController,
-                  label: "Email / Username",
+                  label: "Email",
                   hint: "admin",
                   icon: Icons.person_outline,
                 ),

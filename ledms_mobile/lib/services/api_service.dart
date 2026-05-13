@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:image_picker/image_picker.dart';
 
 class ApiService {
   final _storage = const FlutterSecureStorage();
@@ -113,6 +114,58 @@ class ApiService {
     }
   }
 
+  // --- Получить данные компании (название, логотип, ИНН) ---
+  Future<Map<String, dynamic>> getCompanyDetail() async {
+    final token = await _storage.read(key: 'access_token');
+    final response = await _dio.get(
+      'company/',
+      options: Options(headers: {"Authorization": "Bearer $token"}),
+    );
+    return response.data as Map<String, dynamic>;
+  }
+
+  // --- Обновить данные компании (только для Owner) ---
+  Future<bool> updateCompany({String? name, XFile? logoFile, XFile? bannerFile}) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final fields = <String, dynamic>{};
+      if (name != null) fields['name'] = name;
+      if (logoFile != null) {
+        final bytes = await logoFile.readAsBytes();
+        fields['logo'] = MultipartFile.fromBytes(bytes, filename: logoFile.name);
+      }
+      if (bannerFile != null) {
+        final bytes = await bannerFile.readAsBytes();
+        fields['banner'] = MultipartFile.fromBytes(bytes, filename: bannerFile.name);
+      }
+      final response = await _dio.patch(
+        'company/',
+        data: FormData.fromMap(fields),
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Ошибка обновления компании: $e");
+      return false;
+    }
+  }
+
+  // --- Обновить данные сотрудника (email / role / password) ---
+  Future<bool> updateEmployee(int userId, Map<String, dynamic> data) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.patch(
+        'users/$userId/update/',
+        data: data,
+        options: Options(headers: {"Authorization": "Bearer $token"}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Ошибка обновления сотрудника: $e");
+      return false;
+    }
+  }
+
   Future<bool> deleteEmployee(int userId) async {
     try {
       final token = await _storage.read(key: 'access_token');
@@ -210,6 +263,65 @@ class ApiService {
       print("Критическая ошибка создания/OCR: $e");
       return null;
     }
+  }
+
+  // --- Обновление профиля (PATCH multipart) ---
+  Future<Map<String, dynamic>?> updateProfile({
+    String? firstName,
+    String? lastName,
+    String? email,
+    String? phone,
+    String? bio,
+    String? birthday,
+    XFile? avatarFile,
+    XFile? bannerFile,
+  }) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final fields = <String, dynamic>{};
+      if (firstName != null) fields['first_name'] = firstName;
+      if (lastName != null) fields['last_name'] = lastName;
+      if (email != null) fields['email'] = email;
+      if (phone != null) fields['phone'] = phone;
+      if (bio != null) fields['bio'] = bio;
+      if (birthday != null) fields['birthday'] = birthday;
+
+      if (avatarFile != null) {
+        final bytes = await avatarFile.readAsBytes();
+        fields['avatar'] = MultipartFile.fromBytes(bytes, filename: avatarFile.name);
+      }
+      if (bannerFile != null) {
+        final bytes = await bannerFile.readAsBytes();
+        fields['profile_banner'] = MultipartFile.fromBytes(bytes, filename: bannerFile.name);
+      }
+
+      final response = await _dio.patch(
+        'users/me/',
+        data: FormData.fromMap(fields),
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // --- Смена пароля ---
+  Future<void> changePassword({
+    required String oldPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    final token = await _storage.read(key: 'access_token');
+    await _dio.post(
+      'users/me/change-password/',
+      data: {
+        'old_password': oldPassword,
+        'new_password': newPassword,
+        'confirm_password': confirmPassword,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
   }
 
   // --- Вспомогательные методы ---
