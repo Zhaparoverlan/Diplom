@@ -225,33 +225,36 @@ class ApiService {
     }
   }
 
-  // --- Создание документа ---
-  Future<dynamic> createDocument(
+  // --- Создание документа (OCR теперь выполняется в фоне через Celery) ---
+  Future<Map<String, dynamic>?> createDocument(
     String title,
     PlatformFile file, {
     String? supplier,
     double? amount,
+    String? docDate,   // ISO format YYYY-MM-DD or null
     String? category,
   }) async {
     try {
       final token = await _storage.read(key: 'access_token');
 
-      FormData formData = FormData.fromMap({
-        "title": title,
-        "supplier": supplier ?? "",
-        "amount": amount?.toString() ?? "",
-        "category": category ?? "other",
-        "file": MultipartFile.fromBytes(file.bytes!, filename: file.name),
-      });
+      final fields = <String, dynamic>{
+        'title':    title,
+        'category': category ?? 'other',
+        'file':     MultipartFile.fromBytes(file.bytes!, filename: file.name),
+      };
+      // Only send optional fields when they have real values
+      if (supplier != null && supplier.isNotEmpty) fields['supplier'] = supplier;
+      if (amount != null && amount > 0)            fields['amount']   = amount.toString();
+      if (docDate != null && docDate.isNotEmpty)   fields['doc_date'] = docDate;
 
-      // OCR + первый запуск: скачивание весов моделей на сервере может занять минуты.
       final response = await _dio.post(
         'documents/create/',
-        data: formData,
+        data: FormData.fromMap(fields),
         options: Options(
-          headers: {"Authorization": "Bearer $token"},
-          receiveTimeout: const Duration(minutes: 6),
-          sendTimeout: const Duration(minutes: 3),
+          headers: {'Authorization': 'Bearer $token'},
+          // OCR is async now — upload finishes in a few seconds
+          receiveTimeout: const Duration(seconds: 60),
+          sendTimeout:    const Duration(seconds: 30),
         ),
       );
 
@@ -260,7 +263,66 @@ class ApiService {
       }
       return null;
     } catch (e) {
-      print("Критическая ошибка создания/OCR: $e");
+      print('Ошибка создания документа: $e');
+      return null;
+    }
+  }
+
+  // --- Одобрить документ (needs_approval → ready) ---
+  Future<Map<String, dynamic>?> approveDocument(int docId) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.post(
+        'documents/$docId/approve/',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (e) {
+      print('approveDocument error: $e');
+      return null;
+    }
+  }
+
+  // --- Обновить поля документа (PATCH, без изменения статуса) ---
+  Future<Map<String, dynamic>?> patchDocument(
+      int docId, Map<String, dynamic> data) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.patch(
+        'documents/$docId/',
+        data: data,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // --- Удалить документ ---
+  Future<bool> deleteDocument(int docId) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.delete(
+        'documents/$docId/',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // --- Статус одного документа (для polling) ---
+  Future<Map<String, dynamic>?> getDocumentStatus(int docId) async {
+    try {
+      final token = await _storage.read(key: 'access_token');
+      final response = await _dio.get(
+        'documents/$docId/status/',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (e) {
       return null;
     }
   }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -181,3 +181,35 @@ def extract_text_from_image(image_path: str) -> Tuple[str, float]:
         image_path,
     )
     return full_text, avg_conf
+
+
+# ── Perceptual hash helpers ───────────────────────────────────────────────────
+
+try:
+    import imagehash
+    from PIL import Image as _PILImage
+    _IMAGEHASH_AVAILABLE = True
+except ImportError:
+    _IMAGEHASH_AVAILABLE = False
+
+
+def compute_phash(image_path: str) -> Optional[str]:
+    """Return hex pHash string for an image, or None if imagehash is unavailable."""
+    if not _IMAGEHASH_AVAILABLE:
+        return None
+    try:
+        img = _PILImage.open(image_path)
+        return str(imagehash.phash(img))
+    except Exception:
+        logger.debug("compute_phash failed for %s", image_path, exc_info=True)
+        return None
+
+
+def phash_distance(h1: str, h2: str) -> int:
+    """Hamming distance between two pHash hex strings. Returns 64 (max) on any error."""
+    if not _IMAGEHASH_AVAILABLE or not h1 or not h2:
+        return 64
+    try:
+        return imagehash.hex_to_hash(h1) - imagehash.hex_to_hash(h2)
+    except Exception:
+        return 64

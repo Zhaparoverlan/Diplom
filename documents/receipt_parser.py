@@ -97,3 +97,23 @@ def extract_supplier_from_receipt_text(text: str) -> Optional[str]:
         if _SUPPLIER_RE.search(s):
             return s[:255]
     return None
+
+
+# DD.MM.YYYY or DD/MM/YYYY or DD-MM-YYYY
+_DATE_RE = re.compile(r'\b(\d{1,2})[./\-](\d{1,2})[./\-](\d{2,4})\b')
+
+
+def extract_date_from_receipt_text(text: str) -> Optional[str]:
+    """Return ISO date YYYY-MM-DD from the first valid date found in text, or None."""
+    import datetime
+    for m in _DATE_RE.finditer(text):
+        day_v, mon_v, yr_v = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if yr_v < 100:
+            yr_v += 2000
+        try:
+            d = datetime.date(yr_v, mon_v, day_v)
+            if 2000 <= d.year <= 2100:
+                return d.isoformat()
+        except ValueError:
+            continue
+    return None

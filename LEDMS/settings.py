@@ -173,3 +173,17 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+
+# ── Celery ────────────────────────────────────────────────────────────────────
+# Requires Redis: pip install celery redis
+# Start worker: celery -A LEDMS worker --loglevel=info -P solo  (Windows)
+CELERY_BROKER_URL        = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND    = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT    = ['json']
+CELERY_TASK_SERIALIZER   = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE          = TIME_ZONE
+# Fail fast when Redis is not available so the sync fallback kicks in immediately
+# instead of waiting 30+ seconds for kombu retries.
+CELERY_BROKER_CONNECTION_RETRY        = False
+CELERY_BROKER_CONNECTION_MAX_RETRIES  = 0
